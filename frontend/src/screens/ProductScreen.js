@@ -6,6 +6,7 @@ import Rating from '../components/Rating'
 import Message from '../components/Message'
 import Loader from '../components/Loader'
 import Meta from '../components/Meta'
+import QuantitySelector from '../components/QuantitySelector'
 import {
   listProductDetails,
   createProductReview,
@@ -43,8 +44,14 @@ const ProductScreen = ({ history, match }) => {
     }
   }, [dispatch, match, successProductReview])
 
+  useEffect(() => {
+    if (product.countInStock && qty > product.countInStock) {
+      setQty(product.countInStock)
+    }
+  }, [product.countInStock, qty])
+
   const addToCartHandler = () => {
-    history.push(`/cart/${match.params.id}?qty=${qty}`)
+    history.push(`/cart/${match.params.id}?qty=${Number(qty)}`)
   }
 
   const submitHandler = (e) => {
@@ -116,19 +123,11 @@ const ProductScreen = ({ history, match }) => {
                       <Row>
                         <Col>Qty</Col>
                         <Col>
-                          <Form.Control
-                            as='select'
-                            value={qty}
-                            onChange={(e) => setQty(e.target.value)}
-                          >
-                            {[...Array(product.countInStock).keys()].map(
-                              (x) => (
-                                <option key={x + 1} value={x + 1}>
-                                  {x + 1}
-                                </option>
-                              )
-                            )}
-                          </Form.Control>
+                          <QuantitySelector
+                            qty={qty}
+                            onQtyChange={setQty}
+                            maxStock={product.countInStock}
+                          />
                         </Col>
                       </Row>
                     </ListGroup.Item>
