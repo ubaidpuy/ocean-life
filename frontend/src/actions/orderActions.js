@@ -50,6 +50,9 @@ export const createOrder = (order) => async (dispatch, getState) => {
       payload: data,
     })
     localStorage.removeItem('cartItems')
+    
+    // Return the order data so it can be used in the component
+    return data
   } catch (error) {
     const message =
       error.response && error.response.data.message
@@ -62,6 +65,7 @@ export const createOrder = (order) => async (dispatch, getState) => {
       type: ORDER_CREATE_FAIL,
       payload: message,
     })
+    throw error
   }
 }
 

@@ -46,9 +46,55 @@ const OrderScreen = ({ match, history }) => {
     )
   }
 
+  // Handle Stripe payment verification
+  useEffect(() => {
+    if (!userInfo) return
+
+    const urlParams = new URLSearchParams(window.location.search)
+    const stripeSuccess = urlParams.get('success')
+    const stripeCancel = urlParams.get('cancel')
+    const sessionId = urlParams.get('session_id')
+
+    if (stripeSuccess === 'true' && sessionId) {
+      // Stripe payment was successful, verify and update order status
+      const verifyStripePayment = async () => {
+        try {
+          const config = {
+            headers: {
+              Authorization: `Bearer ${userInfo.token}`,
+            },
+          }
+          
+          // Verify the Stripe session
+          const { data } = await axios.get(
+            `/api/orders/${orderId}/verify-stripe?session_id=${sessionId}`,
+            config
+          )
+
+          if (data.verified) {
+            // Reload order details to get updated payment status
+            dispatch(getOrderDetails(orderId))
+            // Clean up URL
+            window.history.replaceState({}, document.title, `/order/${orderId}`)
+          }
+        } catch (error) {
+          console.error('Error verifying Stripe payment:', error)
+        }
+      }
+      verifyStripePayment()
+    }
+
+    if (stripeCancel === 'true') {
+      // User cancelled Stripe payment
+      window.history.replaceState({}, document.title, `/order/${orderId}`)
+    }
+  }, [orderId, userInfo, dispatch])
+
+  // Main useEffect for loading order and PayPal setup
   useEffect(() => {
     if (!userInfo) {
       history.push('/login')
+      return
     }
 
     const addPayPalScript = async () => {
@@ -67,14 +113,14 @@ const OrderScreen = ({ match, history }) => {
       dispatch({ type: ORDER_PAY_RESET })
       dispatch({ type: ORDER_DELIVER_RESET })
       dispatch(getOrderDetails(orderId))
-    } else if (!order.isPaid) {
+    } else if (!order.isPaid && order.paymentMethod === 'PayPal') {
       if (!window.paypal) {
         addPayPalScript()
       } else {
         setSdkReady(true)
       }
     }
-  }, [dispatch, orderId, successPay, successDeliver, order])
+  }, [dispatch, orderId, successPay, successDeliver, order, userInfo, history])
 
   const successPaymentHandler = (paymentResult) => {
     console.log(paymentResult)
@@ -198,14 +244,20 @@ const OrderScreen = ({ match, history }) => {
               {!order.isPaid && (
                 <ListGroup.Item>
                   {loadingPay && <Loader />}
-                  {!sdkReady ? (
-                    <Loader />
-                  ) : (
-                    <PayPalButton
-                      amount={order.totalPrice}
-                      onSuccess={successPaymentHandler}
-                    />
-                  )}
+                  {order.paymentMethod === 'PayPal' ? (
+                    !sdkReady ? (
+                      <Loader />
+                    ) : (
+                      <PayPalButton
+                        amount={order.totalPrice}
+                        onSuccess={successPaymentHandler}
+                      />
+                    )
+                  ) : order.paymentMethod === 'Stripe' ? (
+                    <Message variant='info'>
+                      Payment processing... If you were redirected from Stripe, your payment is being verified.
+                    </Message>
+                  ) : null}
                 </ListGroup.Item>
               )}
               {loadingDeliver && <Loader />}
