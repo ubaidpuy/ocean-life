@@ -6,7 +6,7 @@ const Message = ({ variant, children }) => {
 }
 
 Message.defaultProps = {
-  variant: 'info',
+  variant: 'danger', // Default to red as per user request for "all errors"
 }
 
 export default Message

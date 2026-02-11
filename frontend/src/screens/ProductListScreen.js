@@ -46,7 +46,10 @@ const ProductListScreen = ({ history, match }) => {
     }
 
     if (successCreate) {
-      history.push(`/admin/product/${createdProduct._id}/edit`)
+      history.push({
+        pathname: `/admin/product/${createdProduct._id}/edit`,
+        state: { isNew: true },
+      })
     } else {
       dispatch(listProducts('', pageNumber))
     }

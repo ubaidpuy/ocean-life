@@ -14,11 +14,10 @@ import {
 } from "../controllers/orderController.js";
 
 import Order from "../models/orderModel.js";
+import Store from "../models/storeModel.js";
 import { protect, admin } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
-
-console.log("Stripe key:", process.env.STRIPE_SECRET_KEY);
 
 // 🔐 Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -40,17 +39,52 @@ router.post(
   "/:id/stripe-checkout",
   protect,
   asyncHandler(async (req, res) => {
-    const order = await Order.findById(req.params.id);
+    // SAAS UPDATE: Ensure we only find orders for the current store
+    const order = await Order.findOne({
+      _id: req.params.id,
+      store: req.storeId,
+    });
 
     if (!order) {
       res.status(404);
       throw new Error("Order not found");
     }
 
-    // Get the frontend URL from environment or use default
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    // Find store and store owner
+    const store = await Store.findById(req.storeId).populate("owner");
+    if (!store || !store.owner) {
+      res.status(404);
+      throw new Error("Store or store owner not found");
+    }
+    const storeOwner = store.owner;
 
-    const session = await stripe.checkout.sessions.create({
+    // Check if store owner has active connected account
+    let connectedAccountId = null;
+    let useMarketplace = false;
+    const PLATFORM_COMMISSION = 0.2; // 20%
+
+    if (storeOwner.stripeAccountId) {
+      try {
+        const account = await stripe.accounts.retrieve(storeOwner.stripeAccountId);
+        if (account.charges_enabled && account.details_submitted) {
+          connectedAccountId = account.id;
+          useMarketplace = true;
+        }
+      } catch (error) {
+        console.error("Error retrieving connected account:", error);
+        // Continue without marketplace if account retrieval fails
+      }
+    }
+
+    const frontendUrl = req.headers.origin || "http://localhost:3000";
+    const totalAmount = Math.round(order.totalPrice * 100); // Convert to cents
+    let platformFee = 0;
+
+    if (useMarketplace && connectedAccountId) {
+      platformFee = Math.round(totalAmount * PLATFORM_COMMISSION);
+    }
+
+    const sessionConfig = {
       payment_method_types: ["card"],
       line_items: order.orderItems.map((item) => ({
         price_data: {
@@ -67,11 +101,21 @@ router.post(
       cancel_url: `${frontendUrl}/order/${order._id}?cancel=true`,
       metadata: {
         orderId: order._id.toString(),
+        storeId: req.storeId.toString(),
+        userId: req.user._id.toString(),
       },
-    });
+    };
 
-    // Store session ID in order (you might want to add a stripeSessionId field to the order model)
-    // For now, we'll retrieve it from the session when verifying
+    if (useMarketplace && connectedAccountId) {
+      sessionConfig.payment_intent_data = {
+        application_fee_amount: platformFee,
+        transfer_data: {
+          destination: connectedAccountId,
+        },
+      };
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionConfig);
     res.json({ url: session.url, sessionId: session.id });
   })
 );
@@ -84,7 +128,12 @@ router.get(
   protect,
   asyncHandler(async (req, res) => {
     const { session_id } = req.query;
-    const order = await Order.findById(req.params.id);
+
+    // SAAS UPDATE: Ensure order belongs to current store
+    const order = await Order.findOne({
+      _id: req.params.id,
+      store: req.storeId,
+    });
 
     if (!order) {
       res.status(404);
@@ -96,11 +145,12 @@ router.get(
       throw new Error("Session ID is required");
     }
 
-    // Retrieve the session from Stripe
-    const session = await stripe.checkout.sessions.retrieve(session_id);
+    // Retrieve the session from Stripe with expanded payment intent
+    const session = await stripe.checkout.sessions.retrieve(session_id, {
+      expand: ['payment_intent'],
+    });
 
     if (session.payment_status === "paid" && !order.isPaid) {
-      // Update order to paid
       order.isPaid = true;
       order.paidAt = Date.now();
       order.paymentResult = {
@@ -109,6 +159,28 @@ router.get(
         update_time: new Date().toISOString(),
         email_address: session.customer_details?.email || order.user?.email,
       };
+      order.stripePaymentIntentId = session.payment_intent?.id || null;
+
+      // Update payment breakdown if marketplace payment (application fee)
+      if (session.payment_intent) {
+        const pi = session.payment_intent;
+        const totalAmount = pi.amount / 100;
+        const platformFee = pi.application_fee_amount
+          ? pi.application_fee_amount / 100
+          : 0;
+        const storeEarning = totalAmount - platformFee;
+
+        order.paymentBreakdown = {
+          totalAmount: totalAmount,
+          adminEarning: platformFee,
+          platformFee: platformFee,
+          storeEarning: storeEarning,
+        };
+
+        // NOTE: Transfer information (if any) is tracked via webhooks,
+        // not by expanding payment_intent.transfer here, because that
+        // property cannot be expanded in the Sessions API.
+      }
 
       const updatedOrder = await order.save();
       res.json({ verified: true, order: updatedOrder });

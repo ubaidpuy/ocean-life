@@ -14,13 +14,20 @@ export const cartReducer = (
     case CART_ADD_ITEM:
       const item = action.payload
 
-      const existItem = state.cartItems.find((x) => x.product === item.product)
+      const existItem = state.cartItems.find(
+        (x) =>
+          x.product === item.product &&
+          (x.variationId || null) === (item.variationId || null)
+      )
 
       if (existItem) {
         return {
           ...state,
           cartItems: state.cartItems.map((x) =>
-            x.product === existItem.product ? item : x
+            x.product === existItem.product &&
+            (x.variationId || null) === (existItem.variationId || null)
+              ? item
+              : x
           ),
         }
       } else {
@@ -30,9 +37,26 @@ export const cartReducer = (
         }
       }
     case CART_REMOVE_ITEM:
-      return {
-        ...state,
-        cartItems: state.cartItems.filter((x) => x.product !== action.payload),
+      // Backward compatibility: payload may be productId (string) or object
+      if (typeof action.payload === 'string') {
+        return {
+          ...state,
+          cartItems: state.cartItems.filter(
+            (x) => x.product !== action.payload
+          ),
+        }
+      } else {
+        const { product, variationId } = action.payload
+        return {
+          ...state,
+          cartItems: state.cartItems.filter(
+            (x) =>
+              !(
+                x.product === product &&
+                (x.variationId || null) === (variationId || null)
+              )
+          ),
+        }
       }
     case CART_SAVE_SHIPPING_ADDRESS:
       return {

@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios from '../utils/axiosConfig'
 import {
   USER_DETAILS_FAIL,
   USER_DETAILS_REQUEST,
@@ -74,7 +74,7 @@ export const logout = () => (dispatch) => {
   document.location.href = '/login'
 }
 
-export const register = (name, email, password) => async (dispatch) => {
+export const register = (name, email, password, isAdmin = false, storeSubdomain = null) => async (dispatch) => {
   try {
     dispatch({
       type: USER_REGISTER_REQUEST,
@@ -86,9 +86,14 @@ export const register = (name, email, password) => async (dispatch) => {
       },
     }
 
+    // Include store subdomain if provided (for main platform registration)
+    const payload = storeSubdomain 
+      ? { name, email, password, isAdmin, store: storeSubdomain }
+      : { name, email, password, isAdmin }
+
     const { data } = await axios.post(
       '/api/users',
-      { name, email, password },
+      payload,
       config
     )
 
@@ -97,12 +102,8 @@ export const register = (name, email, password) => async (dispatch) => {
       payload: data,
     })
 
-    dispatch({
-      type: USER_LOGIN_SUCCESS,
-      payload: data,
-    })
-
-    localStorage.setItem('userInfo', JSON.stringify(data))
+    // Don't automatically log in - user needs to login manually
+    // Removed USER_LOGIN_SUCCESS dispatch and localStorage.setItem
   } catch (error) {
     dispatch({
       type: USER_REGISTER_FAIL,

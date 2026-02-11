@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios from '../utils/axiosConfig'
 import {
   PRODUCT_LIST_REQUEST,
   PRODUCT_LIST_SUCCESS,
@@ -30,9 +30,13 @@ export const listProducts = (keyword = '', pageNumber = '') => async (
   try {
     dispatch({ type: PRODUCT_LIST_REQUEST })
 
-    const { data } = await axios.get(
-      `/api/products?keyword=${keyword}&pageNumber=${pageNumber}`
-    )
+    // Build query string properly - only include keyword if it's not null/empty
+    let queryString = `pageNumber=${pageNumber || 1}`
+    if (keyword && keyword !== 'null' && keyword.trim() !== '') {
+      queryString += `&keyword=${encodeURIComponent(keyword)}`
+    }
+
+    const { data } = await axios.get(`/api/products?${queryString}`)
 
     dispatch({
       type: PRODUCT_LIST_SUCCESS,

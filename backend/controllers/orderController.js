@@ -1,5 +1,6 @@
 import asyncHandler from "express-async-handler";
 import Order from "../models/orderModel.js";
+import Product from "../models/productModel.js";
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -23,6 +24,7 @@ const addOrderItems = asyncHandler(async (req, res) => {
     const order = new Order({
       orderItems,
       user: req.user._id,
+      store: req.storeId, // SAAS: Associate order with store
       shippingAddress,
       paymentMethod,
       itemsPrice,
@@ -33,6 +35,36 @@ const addOrderItems = asyncHandler(async (req, res) => {
 
     const createdOrder = await order.save();
 
+    // --- NEW: Decrement Stock for Variations ---
+    // We must loop through orderItems and update the specific variation's stock
+    for (const item of orderItems) {
+      // Find product
+      const product = await Product.findById(item.product);
+      if (product) {
+        // Find the specific variation
+        const variantIndex = product.variations.findIndex(
+          (v) => v._id.toString() === item.variationId
+        );
+
+        if (variantIndex !== -1) {
+          product.variations[variantIndex].countInStock -= item.qty;
+          // Ensure we don't go negative
+          if (product.variations[variantIndex].countInStock < 0) {
+            product.variations[variantIndex].countInStock = 0;
+          }
+        }
+        
+        // Recalculate total stock for the product summary
+        const totalStock = product.variations.reduce(
+          (sum, v) => sum + (v.countInStock || 0),
+          0
+        );
+        product.countInStock = totalStock;
+
+        await product.save();
+      }
+    }
+
     res.status(201).json(createdOrder);
   }
 });
@@ -41,10 +73,11 @@ const addOrderItems = asyncHandler(async (req, res) => {
 // @route   GET /api/orders/:id
 // @access  Private
 const getOrderById = asyncHandler(async (req, res) => {
-  const order = await Order.findById(req.params.id).populate(
-    "user",
-    "name email"
-  );
+  // SAAS: Ensure ID and Store Match
+  const order = await Order.findOne({
+    _id: req.params.id,
+    store: req.storeId,
+  }).populate("user", "name email");
 
   if (order) {
     res.json(order);
@@ -55,43 +88,46 @@ const getOrderById = asyncHandler(async (req, res) => {
 });
 
 // @desc    Update order to paid
-// @route   GET /api/orders/:id/pay
+// @route   PUT /api/orders/:id/pay
 // @access  Private
 const updateOrderToPaid = asyncHandler(async (req, res) => {
-  const order = await Order.findById(req.params.id);
+  const order = await Order.findOne({
+    _id: req.params.id,
+    store: req.storeId,
+  });
 
-  if (!order) {
+  if (order) {
+    order.isPaid = true;
+    order.paidAt = Date.now();
+    order.paymentResult = {
+      id: req.body.id,
+      status: req.body.status,
+      update_time: req.body.update_time,
+      email_address: req.body.email_address,
+    };
+
+    const updatedOrder = await order.save();
+    res.json(updatedOrder);
+  } else {
     res.status(404);
     throw new Error("Order not found");
   }
-
-  order.isPaid = true;
-  order.paidAt = Date.now();
-
-  // Stripe payment info
-  order.paymentResult = {
-    id: req.body.id, // session id
-    status: req.body.status, // e.g., 'paid'
-    update_time: new Date().toISOString(),
-    email_address: req.body.customer_email,
-  };
-
-  const updatedOrder = await order.save();
-  res.json(updatedOrder);
 });
 
 // @desc    Update order to delivered
-// @route   GET /api/orders/:id/deliver
+// @route   PUT /api/orders/:id/deliver
 // @access  Private/Admin
 const updateOrderToDelivered = asyncHandler(async (req, res) => {
-  const order = await Order.findById(req.params.id);
+  const order = await Order.findOne({
+    _id: req.params.id,
+    store: req.storeId,
+  });
 
   if (order) {
     order.isDelivered = true;
     order.deliveredAt = Date.now();
 
     const updatedOrder = await order.save();
-
     res.json(updatedOrder);
   } else {
     res.status(404);
@@ -103,7 +139,11 @@ const updateOrderToDelivered = asyncHandler(async (req, res) => {
 // @route   GET /api/orders/myorders
 // @access  Private
 const getMyOrders = asyncHandler(async (req, res) => {
-  const orders = await Order.find({ user: req.user._id });
+  // SAAS: User orders IN THIS STORE only
+  const orders = await Order.find({
+    user: req.user._id,
+    store: req.storeId,
+  });
   res.json(orders);
 });
 
@@ -111,7 +151,11 @@ const getMyOrders = asyncHandler(async (req, res) => {
 // @route   GET /api/orders
 // @access  Private/Admin
 const getOrders = asyncHandler(async (req, res) => {
-  const orders = await Order.find({}).populate("user", "id name");
+  // SAAS: All orders for THIS STORE
+  const orders = await Order.find({ store: req.storeId }).populate(
+    "user",
+    "id name"
+  );
   res.json(orders);
 });
 
